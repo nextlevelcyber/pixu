@@ -1,0 +1,293 @@
+bedrock:
+  bus:
+    payloadCodec: JSON   # JSON | SBE
+    aeronDir: /tmp/aeron
+    embeddedMediaDriver: true
+    deleteAeronDirOnStart: false
+  name: Bedrock Market Making System
+  version: 1.0.0
+  environment: development
+  mode: FULL
+
+  server:
+    port: 8080
+    contextPath: /api
+    enableSwagger: true
+    enableActuator: true
+    managementPort: 8081
+    cors:
+      enabled: true
+      allowedOrigins: ["*"]
+      allowedMethods: [GET, POST, PUT, DELETE, OPTIONS]
+      allowedHeaders: ["*"]
+      allowCredentials: false
+      maxAge: 3600
+
+  monitor:
+    enabled: true
+    enableJvmMetrics: true
+    enableSystemMetrics: true
+    flushInterval: 30s
+    enableExport: false
+    export:
+      interval: 30s
+      format: json
+      destination: console
+      includeJvmMetrics: true
+      includeSystemMetrics: true
+
+  md:
+    enabled: true
+    dataSources:
+      - name: FULL
+        type: FULL
+        enabled: false
+    channels:
+      marketTickStreamId: 1001
+      marketTickChannel: market-ticks
+      bookDeltaStreamId: 1002
+      bookDeltaChannel: book-deltas
+      mode: IN_PROC
+    simulation:
+      enabled: false
+      tickInterval: 100ms
+      deltaInterval: 50ms
+      priceVolatility: 0.02
+      volumeRange: 10.0
+      symbols: [BTCUSDT, ETHUSDT, ADAUSDT]
+    buffer:
+      ringBufferSize: 65536
+      batchSize: 100
+      flushInterval: 10ms
+      enableBackpressure: true
+
+    # Binance market data feed configuration (public + private)
+    binance:
+      # Public market data feed
+      enabled: true
+      marketType: SPOT
+      endpointSpot: wss://stream.binance.com:9443/ws
+      endpointFutures: wss://fstream.binance.com/ws
+      depthStream: depth20@100ms
+      symbols: [BTCUSDT, ETHUSDT]
+      reconnectIntervalSeconds: 5
+      maxReconnectAttempts: 10
+
+      # Private user data feed
+      private:
+        enabled: true
+        use-ws-api: true
+        # WebSocket API base URL (JSON-RPC). Adjust if needed.
+        ws-api-url: wss://ws-api.binance.com:443/ws-api/v3
+        # Legacy REST and WS base kept for fallback
+        rest-base: https://api.binance.com
+        ws-base: wss://stream.binance.com:9443/ws
+        # Credentials for legacy listenKey flow (WS-API may require session auth separately)
+        api-key: ${BINANCE_API_KEY:}
+        secret-key: ${BINANCE_SECRET_KEY:}
+        keep-alive-minutes: 30
+        reconnect-interval-seconds: 5
+        max-reconnect-attempts: 10
+        ping-interval-seconds: 30
+
+  strategy:
+    enabled: true
+    executionMode: LIVE
+    strategies:
+      - name: SimpleMarketMaking
+        className: com.bedrock.mm.strategy.SimpleMarketMakingStrategy
+        enabled: false
+        symbols: [BTCUSDT, ETHUSDT]
+        parameters:
+          spread: 0.002
+          quantity: 1.0
+          max-position: 10.0
+          risk-limit: 1000.0
+      - name: SimpleMA
+        className: com.bedrock.mm.strategy.SimpleMaStrategy
+        enabled: true
+        symbols: [BTCUSDT]
+        parameters:
+          fastPeriod: 9
+          slowPeriod: 21
+          tradeQty: 0.001
+    global:
+      defaultSpread: 0.001
+      defaultQuantity: 1.0
+      maxPosition: 5.0
+      riskLimit: 500.0
+    risk:
+      maxDrawdown: 0.1
+      stopLoss: 0.05
+      positionLimit: 100.0
+    performance:
+      workerThreads: 4
+      ringBufferSize: 1024
+      batchSize: 10
+      flushIntervalMs: 1000
+      enableBatching: true
+      enableAsyncProcessing: true
+      maxQueueSize: 10000
+    monitoring:
+      enabled: true
+      statsIntervalMs: 10000
+      enableMetrics: true
+      enableLogging: true
+      logLevel: INFO
+      enablePerformanceTracking: true
+      enableRiskMonitoring: true
+
+  pricing:
+    enabled: false
+    symbols: [BTCUSDT, ETHUSDT]
+
+  oms:
+    enabled: false
+    symbols: [BTCUSDT, ETHUSDT]
+    exchange: binance
+
+  adapter:
+    enabled: true
+    type: binance
+    environment: sandbox
+    connection:
+      maxConnections: 10
+      enableCompression: true
+      enableKeepAlive: true
+    auth:
+      exchanges:
+        binance:
+          apiKey: ${BINANCE_API_KEY:}
+          secretKey: ${BINANCE_SECRET_KEY:}
+        bitget:
+          apiKey: ${BITGET_API_KEY:}
+          secretKey: ${BITGET_SECRET_KEY:}
+          passphrase: ${BITGET_PASSPHRASE:}
+    rateLimit:
+      enabled: true
+      requestsPerSecond: 10
+    retry:
+      enabled: true
+      maxRetries: 3
+      initialDelayMs: 1000
+      maxDelayMs: 10000
+      multiplier: 2.0
+    webSocket:
+      enabled: true
+      autoReconnect: true
+      pingIntervalMs: 30000
+      maxFrameSize: 65536
+    order:
+      orderTimeoutMs: 30000
+      maxOrdersPerSymbol: 100
+      maxTotalOrders: 1000
+    customSettings:
+      binance:
+        base-url: https://api.binance.com
+        ws-url: wss://stream.binance.com:9443
+        recv-window-ms: 5000
+        health-path: /api/v3/ping
+        ws-subscriptions:
+          - btcusdt@trade
+          - ethusdt@trade
+      bitget:
+        base-url: https://api.bitget.com
+        ws-url: wss://ws.bitget.com/mix/v1/stream
+        ws-login-enabled: false
+        product-type: mix
+        health-path: /api/mix/v1/market/time
+
+# Spring Boot standard keys (kept minimal and referencing bedrock.*)
+server:
+  port: ${bedrock.server.port}
+  servlet:
+    context-path: ${bedrock.server.contextPath}
+
+management:
+  server:
+    port: ${bedrock.server.managementPort}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+logging:
+  level:
+    com.bedrock.mm: INFO
+    org.springframework: WARN
+    io.aeron: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/bedrock.log
+    max-size: 100MB
+    max-history: 30
+
+spring:
+  profiles:
+    active: development
+  application:
+    name: ${bedrock.name}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: development
+
+bedrock:
+  environment: development
+  md:
+    simulation:
+      enabled: false
+  adapter:
+    enabled: true
+
+logging:
+  level:
+    com.bedrock.mm: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: production
+
+bedrock:
+  environment: production
+  mode: FULL
+
+md:
+  simulation:
+    enabled: false
+
+logging:
+  level:
+    com.bedrock.mm: INFO
+    root: WARN
+
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+
+bedrock:
+  environment: test
+
+md:
+  simulation:
+    tickInterval: 10ms
+    priceVolatility: 0.05
+
+logging:
+  level:
+    com.bedrock.mm: DEBUG

@@ -1,0 +1,86 @@
+# Test configuration for Bedrock Market Making System
+
+bedrock:
+  name: "Bedrock Market Making System"
+  version: "1.0.0"
+  environment: "test"
+  mode: SIMULATION
+  
+  # Server Configuration
+  server:
+    port: 0  # Random port for tests
+    context-path: "/api"
+    enable-swagger: false
+    enable-actuator: false
+    management-port: "0"
+  
+  # Monitor Configuration - disabled for tests due to Chronicle Map issues
+  monitor:
+    enabled: false
+    metrics-enabled: false
+    health-check-enabled: true
+    export-interval: 1
+    retention-period: 60
+  
+  # Market Data Configuration
+  md:
+    enabled: false
+    data-sources:
+      - name: "test-simulation"
+        type: "SIMULATION"
+        enabled: true
+    channels:
+      market-tick-stream-id: 1001
+      market-tick-channel: "test-market-ticks"
+      book-delta-stream-id: 1002
+      book-delta-channel: "test-book-deltas"
+      mode: "IN_PROC"
+    simulation:
+      enabled: true
+      tick-interval: 10ms
+      delta-interval: 5ms
+      price-volatility: 0.01
+      volume-range: 1.0
+      symbols: ["TESTUSDT"]
+    buffer:
+      ring-buffer-size: 1024
+      batch-size: 10
+      flush-interval: 1ms
+      enable-backpressure: false
+  
+  # Strategy Configuration
+  strategy:
+    enabled: false
+    execution-mode: SIMULATION
+    strategies: []  # No strategies for basic tests
+    global-parameters:
+      spread: 0.001
+      quantity: 0.1
+      max-position: 1.0
+      risk-limit: 100.0
+  
+  # Adapter Configuration
+  adapter:
+    enabled: false
+    type: "simulation"
+    environment: "test"
+
+# Spring Boot Test Configuration
+spring:
+  application:
+    name: ${bedrock.name}
+
+# Disable management endpoints for tests
+management:
+  endpoints:
+    enabled-by-default: false
+  endpoint:
+    health:
+      enabled: true
+
+# Test logging
+logging:
+  level:
+    com.bedrock.mm: DEBUG
+    org.springframework: WARN
+    root: WARN
