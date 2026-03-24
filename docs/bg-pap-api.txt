@@ -1,0 +1,3 @@
+apiKey: bg_771324c7fc2bb5487edbc1f9fde68fb9
+secretKey: fd85f98ab60aa1f9d615ac85ba00356ef1db71b278efecc87bab0eeaccb4766b
+passphrase: 11223344
