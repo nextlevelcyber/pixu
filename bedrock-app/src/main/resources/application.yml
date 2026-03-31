@@ -96,16 +96,21 @@ bedrock:
     strategies:
       - name: SimpleMarketMaking
         className: com.bedrock.mm.strategy.SimpleMarketMakingStrategy
-        enabled: false
+        enabled: true
         symbols: [BTCUSDT, ETHUSDT]
         parameters:
-          spread: 0.002
-          quantity: 1.0
-          max-position: 10.0
+          spread: 0.0015
+          quantity: 0.001
+          max-position: 0.01
           risk-limit: 1000.0
+          num-levels: 3
+          size-per-level: 0.001
+          grid-spacing-bps: 8.0
+          reprice-threshold-bps: 4.0
+          skew-factor: 0.5
       - name: SimpleMA
         className: com.bedrock.mm.strategy.SimpleMaStrategy
-        enabled: true
+        enabled: false
         symbols: [BTCUSDT]
         parameters:
           fastPeriod: 9
@@ -148,7 +153,7 @@ bedrock:
 
   adapter:
     enabled: true
-    type: binance
+    type: bitget
     environment: sandbox
     connection:
       maxConnections: 10
@@ -192,10 +197,12 @@ bedrock:
           - ethusdt@trade
       bitget:
         base-url: https://api.bitget.com
-        ws-url: wss://ws.bitget.com/mix/v1/stream
+        ws-url: wss://ws.bitget.com/v3/ws
+        pap-trading: true
         ws-login-enabled: false
-        product-type: mix
-        health-path: /api/mix/v1/market/time
+        product-type: spot
+        uta-category: spot
+        health-path: /api/v2/public/time
 
 # Spring Boot standard keys (kept minimal and referencing bedrock.*)
 server:

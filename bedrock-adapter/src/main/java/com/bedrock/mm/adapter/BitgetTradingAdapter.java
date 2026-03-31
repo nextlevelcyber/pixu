@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import javax.crypto.Mac;
@@ -56,6 +57,8 @@ public class BitgetTradingAdapter implements TradingAdapter {
     private TradeUpdateHandler tradeUpdateHandler;
     private BalanceUpdateHandler balanceUpdateHandler;
     private PositionUpdateHandler positionUpdateHandler;
+    private final Map<String, SubmittedOrderRef> ordersByClientOrderId = new ConcurrentHashMap<>();
+    private final Map<String, SubmittedOrderRef> ordersByExchangeOrderId = new ConcurrentHashMap<>();
 
     @Override
     public String getName() {
@@ -71,8 +74,11 @@ public class BitgetTradingAdapter implements TradingAdapter {
     public void initialize(AdapterConfig config) {
         this.config = config;
         String key = getName().toLowerCase();
-        this.authDetails = config.getAuth().getAuthFor(key);
+        this.authDetails = config.getAuth() != null ? config.getAuth().getAuthFor(key) : null;
         this.customSettings = config.getCustomSettingsFor(key);
+        if (this.customSettings == null) {
+            this.customSettings = new HashMap<>();
+        }
         Object bu = customSettings.getOrDefault("base-url", config.getConnection().getBaseUrl());
         Object wu = customSettings.getOrDefault("ws-url", config.getConnection().getWsUrl());
         Object pt = customSettings.getOrDefault("product-type", null);
@@ -353,41 +359,77 @@ public class BitgetTradingAdapter implements TradingAdapter {
     @Override
     public CompletableFuture<OrderResponse> submitOrder(OrderRequest request) {
         stats.recordRequest();
-        OrderResponse resp = new OrderResponse(
-                "BITGET-" + System.currentTimeMillis(),
-                request.clientOrderId(),
-                OrderStatus.Status.NEW,
-                "ACCEPTED",
-                System.currentTimeMillis()
-        );
         stats.recordOrderSubmitted();
-        stats.recordOrderAccepted();
-        if (orderUpdateHandler != null) {
-            long priceScaled = request.price();
-            long qtyScaled = request.quantity();
-            BigDecimal priceDec = BigDecimal.valueOf(priceScaled).divide(BigDecimal.valueOf(100_000_000));
-            BigDecimal qtyDec = BigDecimal.valueOf(qtyScaled).divide(BigDecimal.valueOf(100_000_000));
-            orderUpdateHandler.onOrderUpdate(new OrderUpdate(
-                    resp.orderId(), request.clientOrderId(), request.symbol(), request.side(), request.type(),
-                    priceDec, qtyDec, qtyDec, priceDec, OrderStatus.Status.NEW, null,
-                    System.currentTimeMillis()
-            ));
+        if (!hasTradingCredentials() || baseUrl == null || baseUrl.isEmpty()) {
+            return CompletableFuture.completedFuture(rejectOrder(request, "Bitget credentials or baseUrl not configured"));
         }
-        return CompletableFuture.completedFuture(resp);
+
+        String requestPath = "/api/v3/trade/place-order";
+        long ts = System.currentTimeMillis();
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("symbol", request.symbol().getName());
+        payload.put("side", toBitgetSide(request.side()));
+        payload.put("orderType", toBitgetOrderType(request.type()));
+        payload.put("qty", scaledDecimal(request.quantity()).toPlainString());
+        payload.put("clientOid", request.clientOrderId());
+        String category = resolveUtaCategory(request.symbol());
+        if (category != null && !category.isEmpty()) {
+            payload.put("category", category);
+        }
+        if (request.type() == OrderType.LIMIT) {
+            payload.put("price", scaledDecimal(request.price()).toPlainString());
+            String force = toBitgetTimeInForce(request.timeInForce());
+            if (force != null && !force.isEmpty()) {
+                payload.put("force", force);
+            }
+        }
+
+        try {
+            String body = mapper.writeValueAsString(payload);
+            HttpRequest httpRequest = buildBitgetSignedPost(requestPath, body, ts);
+            long startNs = System.nanoTime();
+            return httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(response -> mapSubmitOrderResponse(request, category, startNs, response))
+                    .exceptionally(ex -> rejectOrder(request, "Bitget place-order failed: " + ex.getMessage()));
+        } catch (Exception e) {
+            return CompletableFuture.completedFuture(rejectOrder(request, "Bitget place-order build failed: " + e.getMessage()));
+        }
     }
 
     @Override
     public CompletableFuture<CancelResponse> cancelOrder(String orderId) {
         stats.recordRequest();
-        stats.recordOrderCancelled();
-        CancelResponse resp = new CancelResponse(orderId, true, "CANCELLED", System.currentTimeMillis());
-        if (orderUpdateHandler != null) {
-            orderUpdateHandler.onOrderUpdate(new OrderUpdate(
-                    orderId, null, Symbol.btcUsdt(), null, null, null, null, null, null,
-                    OrderStatus.Status.CANCELED, null, System.currentTimeMillis()
-            ));
+        SubmittedOrderRef ref = resolveOrderRef(orderId);
+        if (!hasTradingCredentials() || baseUrl == null || baseUrl.isEmpty()) {
+            return CompletableFuture.completedFuture(new CancelResponse(orderId, false, "Bitget credentials or baseUrl not configured", System.currentTimeMillis()));
         }
-        return CompletableFuture.completedFuture(resp);
+        String requestPath = "/api/v3/trade/cancel-order";
+        Map<String, Object> payload = new HashMap<>();
+        if (ref != null) {
+            if (ref.orderId() != null && !ref.orderId().isEmpty()) {
+                payload.put("orderId", ref.orderId());
+            } else {
+                payload.put("clientOid", ref.clientOrderId());
+            }
+            payload.put("symbol", ref.symbol().getName());
+            if (ref.category() != null && !ref.category().isEmpty()) {
+                payload.put("category", ref.category());
+            }
+        } else if (looksLikeBitgetOrderId(orderId)) {
+            payload.put("orderId", orderId);
+        } else {
+            payload.put("clientOid", orderId);
+        }
+
+        try {
+            String body = mapper.writeValueAsString(payload);
+            HttpRequest httpRequest = buildBitgetSignedPost(requestPath, body, System.currentTimeMillis());
+            return httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(response -> mapCancelOrderResponse(orderId, ref, response))
+                    .exceptionally(ex -> new CancelResponse(orderId, false, "Bitget cancel failed: " + ex.getMessage(), System.currentTimeMillis()));
+        } catch (Exception e) {
+            return CompletableFuture.completedFuture(new CancelResponse(orderId, false, "Bitget cancel build failed: " + e.getMessage(), System.currentTimeMillis()));
+        }
     }
 
     @Override
@@ -399,8 +441,15 @@ public class BitgetTradingAdapter implements TradingAdapter {
     @Override
     public CompletableFuture<OrderStatus> getOrderStatus(String orderId) {
         stats.recordRequest();
-        OrderStatus status = new OrderStatus(orderId, null, Symbol.btcUsdt(), null, null,
-                null, null, null, null, OrderStatus.Status.NEW, System.currentTimeMillis(), System.currentTimeMillis());
+        SubmittedOrderRef ref = resolveOrderRef(orderId);
+        Symbol symbol = ref != null ? ref.symbol() : Symbol.btcUsdt();
+        String clientOrderId = ref != null ? ref.clientOrderId() : null;
+        String exchangeOrderId = ref != null && ref.orderId() != null ? ref.orderId() : orderId;
+        BigDecimal price = ref != null ? ref.price() : null;
+        BigDecimal quantity = ref != null ? ref.quantity() : null;
+        OrderStatus.Status currentStatus = ref != null ? ref.status() : OrderStatus.Status.NEW;
+        OrderStatus status = new OrderStatus(exchangeOrderId, clientOrderId, symbol, ref != null ? ref.side() : null, ref != null ? ref.type() : null,
+                price, quantity, quantity, price, currentStatus, System.currentTimeMillis(), System.currentTimeMillis());
         return CompletableFuture.completedFuture(status);
     }
 
@@ -597,15 +646,32 @@ public class BitgetTradingAdapter implements TradingAdapter {
         String prehash = ts + "GET" + requestPath + (queryString.isEmpty() ? "" : ("?" + queryString));
         String sign = bitgetHmacBase64(authDetails.getSecretKey(), prehash, authDetails.getSignatureMethod());
         String url = joinUrl(baseUrl, requestPath) + (queryString.isEmpty() ? "" : ("?" + queryString));
-        return HttpRequest.newBuilder(URI.create(url))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                 .timeout(connectTimeout)
                 .header("ACCESS-KEY", authDetails.getApiKey())
                 .header("ACCESS-SIGN", sign)
                 .header("ACCESS-TIMESTAMP", String.valueOf(ts))
                 .header("ACCESS-PASSPHRASE", authDetails.getPassphrase())
                 .header("Content-Type", "application/json")
-                .GET()
-                .build();
+                .GET();
+        applyDemoTradingHeader(builder);
+        return builder.build();
+    }
+
+    private HttpRequest buildBitgetSignedPost(String requestPath, String body, long ts) {
+        String prehash = ts + "POST" + requestPath + body;
+        String sign = bitgetHmacBase64(authDetails.getSecretKey(), prehash, authDetails.getSignatureMethod());
+        String url = joinUrl(baseUrl, requestPath);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .timeout(connectTimeout)
+                .header("ACCESS-KEY", authDetails.getApiKey())
+                .header("ACCESS-SIGN", sign)
+                .header("ACCESS-TIMESTAMP", String.valueOf(ts))
+                .header("ACCESS-PASSPHRASE", authDetails.getPassphrase())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body));
+        applyDemoTradingHeader(builder);
+        return builder.build();
     }
 
     private String buildQueryString(Map<String, String> query) {
@@ -652,6 +718,216 @@ public class BitgetTradingAdapter implements TradingAdapter {
         return v != null ? v : BigDecimal.ZERO;
     }
 
+    private BigDecimal scaledDecimal(long scaledValue) {
+        return BigDecimal.valueOf(scaledValue, 8).stripTrailingZeros();
+    }
+
+    private boolean hasTradingCredentials() {
+        return authDetails != null
+                && authDetails.getApiKey() != null
+                && !authDetails.getApiKey().isEmpty()
+                && authDetails.getSecretKey() != null
+                && !authDetails.getSecretKey().isEmpty()
+                && authDetails.getPassphrase() != null
+                && !authDetails.getPassphrase().isEmpty();
+    }
+
+    private void applyDemoTradingHeader(HttpRequest.Builder builder) {
+        if (builder != null && isDemoTradingEnabled()) {
+            builder.header("paptrading", "1");
+        }
+    }
+
+    private boolean isDemoTradingEnabled() {
+        Object configured = customSettings.get("pap-trading");
+        if (configured != null) {
+            return Boolean.parseBoolean(String.valueOf(configured));
+        }
+        return config != null && "sandbox".equalsIgnoreCase(config.getEnvironment());
+    }
+
+    private String toBitgetSide(com.bedrock.mm.common.model.Side side) {
+        return side == com.bedrock.mm.common.model.Side.SELL ? "sell" : "buy";
+    }
+
+    private String toBitgetOrderType(OrderType type) {
+        return type == OrderType.MARKET ? "market" : "limit";
+    }
+
+    private String toBitgetTimeInForce(TimeInForce timeInForce) {
+        if (timeInForce == null) {
+            return "gtc";
+        }
+        return switch (timeInForce) {
+            case IOC -> "ioc";
+            case FOK -> "fok";
+            default -> "gtc";
+        };
+    }
+
+    private String resolveUtaCategory(Symbol symbol) {
+        Object category = customSettings.get("uta-category");
+        if (category != null) {
+            return String.valueOf(category);
+        }
+        String configuredProductType = customSettings.getOrDefault("product-type", productType) != null
+                ? String.valueOf(customSettings.getOrDefault("product-type", productType))
+                : "";
+        if ("spot".equalsIgnoreCase(configuredProductType)) {
+            return "spot";
+        }
+        if (symbol != null && symbol.getName() != null && symbol.getName().contains("_")) {
+            return "usdt-futures";
+        }
+        return "spot";
+    }
+
+    private OrderResponse mapSubmitOrderResponse(OrderRequest request, String category, long startNs, HttpResponse<String> response) {
+        long tsMs = System.currentTimeMillis();
+        stats.recordLatency((System.nanoTime() - startNs) / 1_000_000.0);
+        if (response.statusCode() >= 400) {
+            stats.recordFailedRequest();
+            stats.recordClientError();
+            return rejectOrder(request, "Bitget place-order HTTP " + response.statusCode() + ": " + trimBody(response.body()));
+        }
+        try {
+            JsonNode root = mapper.readTree(response.body());
+            String code = asText(root, "code", "");
+            String msg = asText(root, "msg", "");
+            if (!"00000".equals(code)) {
+                stats.recordFailedRequest();
+                if (response.statusCode() == 429) {
+                    stats.recordRateLimitedRequest();
+                }
+                return rejectOrder(request, "Bitget place-order rejected: " + code + " " + msg);
+            }
+            stats.recordSuccessfulRequest();
+            stats.recordOrderAccepted();
+            JsonNode data = root.get("data");
+            String exchangeOrderId = data != null ? asText(data, "orderId", "") : "";
+            if (exchangeOrderId == null || exchangeOrderId.isEmpty()) {
+                exchangeOrderId = request.clientOrderId();
+            }
+            SubmittedOrderRef ref = new SubmittedOrderRef(
+                    request.clientOrderId(),
+                    exchangeOrderId,
+                    request.symbol(),
+                    request.side(),
+                    request.type(),
+                    scaledDecimal(request.price()),
+                    scaledDecimal(request.quantity()),
+                    category,
+                    OrderStatus.Status.NEW
+            );
+            indexOrder(ref);
+            emitOrderUpdate(ref, OrderStatus.Status.NEW, null);
+            return new OrderResponse(exchangeOrderId, request.clientOrderId(), OrderStatus.Status.NEW, msg.isEmpty() ? "ACCEPTED" : msg, tsMs);
+        } catch (Exception e) {
+            stats.recordFailedRequest();
+            return rejectOrder(request, "Bitget place-order parse failed: " + e.getMessage());
+        }
+    }
+
+    private CancelResponse mapCancelOrderResponse(String requestedId, SubmittedOrderRef ref, HttpResponse<String> response) {
+        long tsMs = System.currentTimeMillis();
+        if (response.statusCode() >= 400) {
+            stats.recordFailedRequest();
+            return new CancelResponse(requestedId, false, "Bitget cancel HTTP " + response.statusCode() + ": " + trimBody(response.body()), tsMs);
+        }
+        try {
+            JsonNode root = mapper.readTree(response.body());
+            String code = asText(root, "code", "");
+            String msg = asText(root, "msg", "");
+            if (!"00000".equals(code)) {
+                stats.recordFailedRequest();
+                return new CancelResponse(requestedId, false, "Bitget cancel rejected: " + code + " " + msg, tsMs);
+            }
+            stats.recordSuccessfulRequest();
+            stats.recordOrderCancelled();
+            SubmittedOrderRef cancelledRef = ref != null ? ref.withStatus(OrderStatus.Status.CANCELED) : null;
+            if (cancelledRef != null) {
+                indexOrder(cancelledRef);
+                emitOrderUpdate(cancelledRef, OrderStatus.Status.CANCELED, null);
+            } else if (orderUpdateHandler != null) {
+                orderUpdateHandler.onOrderUpdate(new OrderUpdate(
+                        requestedId, requestedId, Symbol.btcUsdt(), null, null, null, null, null, null,
+                        OrderStatus.Status.CANCELED, null, tsMs
+                ));
+            }
+            return new CancelResponse(requestedId, true, msg.isEmpty() ? "CANCELLED" : msg, tsMs);
+        } catch (Exception e) {
+            stats.recordFailedRequest();
+            return new CancelResponse(requestedId, false, "Bitget cancel parse failed: " + e.getMessage(), tsMs);
+        }
+    }
+
+    private OrderResponse rejectOrder(OrderRequest request, String reason) {
+        long tsMs = System.currentTimeMillis();
+        stats.recordFailedRequest();
+        stats.recordOrderRejected();
+        SubmittedOrderRef ref = new SubmittedOrderRef(
+                request.clientOrderId(),
+                request.clientOrderId(),
+                request.symbol(),
+                request.side(),
+                request.type(),
+                scaledDecimal(request.price()),
+                scaledDecimal(request.quantity()),
+                resolveUtaCategory(request.symbol()),
+                OrderStatus.Status.REJECTED
+        );
+        indexOrder(ref);
+        emitOrderUpdate(ref, OrderStatus.Status.REJECTED, reason);
+        return new OrderResponse(request.clientOrderId(), request.clientOrderId(), OrderStatus.Status.REJECTED, reason, tsMs);
+    }
+
+    private void emitOrderUpdate(SubmittedOrderRef ref, OrderStatus.Status status, String reason) {
+        if (orderUpdateHandler == null || ref == null) {
+            return;
+        }
+        orderUpdateHandler.onOrderUpdate(new OrderUpdate(
+                ref.orderId(),
+                ref.clientOrderId(),
+                ref.symbol(),
+                ref.side(),
+                ref.type(),
+                ref.price(),
+                ref.quantity(),
+                ref.quantity(),
+                ref.price(),
+                status,
+                reason,
+                System.currentTimeMillis()
+        ));
+    }
+
+    private void indexOrder(SubmittedOrderRef ref) {
+        if (ref == null) {
+            return;
+        }
+        if (ref.clientOrderId() != null && !ref.clientOrderId().isEmpty()) {
+            ordersByClientOrderId.put(ref.clientOrderId(), ref);
+        }
+        if (ref.orderId() != null && !ref.orderId().isEmpty()) {
+            ordersByExchangeOrderId.put(ref.orderId(), ref);
+        }
+    }
+
+    private SubmittedOrderRef resolveOrderRef(String orderId) {
+        if (orderId == null || orderId.isEmpty()) {
+            return null;
+        }
+        SubmittedOrderRef byExchangeId = ordersByExchangeOrderId.get(orderId);
+        if (byExchangeId != null) {
+            return byExchangeId;
+        }
+        return ordersByClientOrderId.get(orderId);
+    }
+
+    private boolean looksLikeBitgetOrderId(String value) {
+        return value != null && value.chars().allMatch(Character::isDigit);
+    }
+
     private String resolveProductTypeParam() {
         Object ptObj = customSettings != null ? customSettings.get("product-type") : null;
         if (ptObj != null) {
@@ -684,6 +960,22 @@ public class BitgetTradingAdapter implements TradingAdapter {
             }, "bitget-ws-reconnect").start();
         } catch (Exception e) {
             log.warn("{} scheduleWsReconnect error: {}", getName(), e.toString());
+        }
+    }
+
+    private record SubmittedOrderRef(
+            String clientOrderId,
+            String orderId,
+            Symbol symbol,
+            com.bedrock.mm.common.model.Side side,
+            OrderType type,
+            BigDecimal price,
+            BigDecimal quantity,
+            String category,
+            OrderStatus.Status status
+    ) {
+        private SubmittedOrderRef withStatus(OrderStatus.Status nextStatus) {
+            return new SubmittedOrderRef(clientOrderId, orderId, symbol, side, type, price, quantity, category, nextStatus);
         }
     }
 }
