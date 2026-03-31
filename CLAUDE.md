@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Bedrock** is being refactored into a low-latency HFT Market Maker system written in Java 21. The target architecture (see `docs/QT_HFT_MM_ARCHITECTURE.md`) is a 4-process design with per-instrument strict ordering and tick-to-trade latency < 10μs.
 
-**Current Phase:** Phase 5 (OMS Bus Wiring) complete. Single-process tick-to-trade loop fully wired. Ready for Phase 6 (multi-process Aeron split) or production hardening.
+**Current Phase:** Phase 5 (OMS Bus Wiring) complete. Single-process tick-to-trade loop fully wired. Bitget UTA market maker integration in progress. Phase 6 (multi-process Aeron split) or production hardening next.
 
 **Key Architectural Decisions:**
 - **No "Strategy" module** - Market Makers don't have directional Alpha. FairMid + QuoteConstruction merge into a "Pricing Engine". Current `bedrock-strategy` will be refactored.
@@ -15,8 +15,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **HA via REST reconciliation** - No Chronicle Queue event replay. OMS restart recovers state via REST GET /openOrders + /positions.
 - **Zero allocation hot path** - All hot path uses primitive long arrays, no heap allocation, no String operations.
 
+## Agent Roles
+
+See `AGENTS.md` for specialized agent definitions:
+- **hft-analyst**: Exchange data mastery, microstructure analytics, latency forensics
+- **hft-strategist**: HFT strategy design, alpha formulation, executable specifications
+
 ## Build & Run Commands
 
+**Recommended:** Use shell scripts for all operations (they include required JVM flags and environment setup):
 ```bash
 # Full build (all modules)
 ./scripts/build.sh
@@ -29,13 +36,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Build with Docker image
 ./scripts/build.sh -d
+```
 
-# Maven direct (skip tests, build app with all deps)
-/Users/kaymen/tool/apache-maven-3.9.9/bin/mvn \
-  --settings /Users/kaymen/tool/apache-maven-3.9.9/conf/settings.xml \
-  -Dmaven.repo.local=/Users/kaymen/tool/repository \
-  clean package -DskipTests -pl bedrock-app -am
+**Direct Maven** (requires manual configuration of Maven home and local repo):
+```bash
+# Set your Maven paths first
+MVN="/path/to/mvn --settings /path/to/settings.xml -Dmaven.repo.local=/path/to/repo"
 
+# Build app with all dependencies, skip tests
+$MVN clean package -DskipTests -pl bedrock-app -am
+
+# Run tests
+$MVN test -pl bedrock-aeron
+$MVN -Dtest=InProcEventBusIntegrationTest test -pl bedrock-aeron
+$MVN test -pl bedrock-oms
+$MVN test -pl bedrock-pricing
+$MVN test -pl bedrock-app -Dtest="OmsBusConsumerTest,OmsCoordinatorTest,PricingBusConsumerTest,PricingEngineCoordinatorTest"
+```
+
+**Requirements:** Java 21+, Maven 3.9.9.
+
+**Maven paths:** Update the following for your environment when running Maven directly:
+- `MAVEN_HOME`: Maven installation directory
+- `MAVEN_SETTINGS`: Path to `settings.xml`
+- `MAVEN_REPO_LOCAL`: Path to local Maven repository
+
+Profile names: `development`, `production`, `test` (note: using `dev` as profile will NOT load the development config).
+
+**Chronicle Queue startup:** Requires `--add-opens` JVM flags when run outside the start script — use the script to avoid Chronicle initialization failures.
+
+## Run & Stop Commands
+
+```bash
 # Run application
 ./scripts/start.sh -p development -m FULL
 # Background mode
@@ -47,7 +79,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Stop
 ./scripts/stop.sh
+```
 
+## Test Commands
+
+```bash
 # Run all tests
 ./scripts/test.sh
 
@@ -66,25 +102,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Tests with coverage
 ./scripts/test.sh -c
 
-# Maven direct
-MVN="/Users/kaymen/tool/apache-maven-3.9.9/bin/mvn --settings /Users/kaymen/tool/apache-maven-3.9.9/conf/settings.xml -Dmaven.repo.local=/Users/kaymen/tool/repository"
-$MVN test -pl bedrock-aeron
-$MVN -Dtest=InProcEventBusIntegrationTest test -pl bedrock-aeron
-$MVN test -pl bedrock-oms
-$MVN test -pl bedrock-pricing
-$MVN test -pl bedrock-app -Dtest="OmsBusConsumerTest,OmsCoordinatorTest,PricingBusConsumerTest,PricingEngineCoordinatorTest"
+# Run tests with simulation exchange (no API keys needed)
+./scripts/test.sh -Dbedrock.adapter.type=simulation
 ```
-
-**Requirements:** Java 21+, Maven 3.9.9.
-
-- Maven home: `/Users/kaymen/tool/apache-maven-3.9.9`
-- Maven settings: `/Users/kaymen/tool/apache-maven-3.9.9/conf/settings.xml`
-- Maven local repo: `/Users/kaymen/tool/repository`
-- Always pass `--settings` **and** `-Dmaven.repo.local=/Users/kaymen/tool/repository` when running `mvn` directly.
-
-Profile names: `development`, `production`, `test` (note: using `dev` as profile will NOT load the development config).
-
-**Chronicle Queue startup:** Requires `--add-opens` JVM flags when run outside the start script — use the script to avoid Chronicle initialization failures.
 
 ## Module Dependency Graph
 
@@ -325,26 +345,49 @@ Defined in `bedrock-sbe/src/main/resources/sbe/bedrock-messages.xml`.
 | `ChannelProvider` | `bedrock-common/channel` | SPI for new transport backends |
 | `EventBus` | `bedrock-aeron/bus` | Swap transport layer |
 
-Built-in strategies: `SimpleMaStrategy` (MA crossover), `SimpleMarketMakingStrategy`. Built-in adapters: `BinanceTradingAdapter`, `BitgetTradingAdapter`, `SimulationTradingAdapter`.
+**Built-in implementations:**
+- Strategies: `SimpleMaStrategy` (MA crossover), `SimpleMarketMakingStrategy`
+- Adapters: `BinanceTradingAdapter`, `BitgetTradingAdapter`, `SimulationTradingAdapter`
+- Feeds: `BinanceFeed`, `BitgetV3Feed`
+
+**Adding a new exchange adapter:**
+1. Implement `TradingAdapter` interface in `bedrock-adapter`
+2. Add configuration properties to `application.yml`
+3. Configure credentials via environment variables (`${EXCHANGE_API_KEY}`, etc.)
+4. Set `bedrock.adapter.type: <your-adapter>` in application.yml
 
 ## Configuration
 
 All settings are under the `bedrock.*` namespace in `bedrock-app/src/main/resources/application.yml`. Spring profiles (`development`, `production`, `test`) override specific sections at the bottom of that file.
 
-Key switches:
+**Key switches:**
 - `bedrock.bus.mode`: `IN_PROC` | `AERON_IPC` | `AERON_UDP` — controls single vs. multi-process deployment
 - `bedrock.bus.payloadCodec`: `JSON` | `SBE` — payload encoding (wire envelope format is always binary)
+- `bedrock.bus.perInstrumentEnabled`: `true`/`false` — use per-instrument LMAX Disruptor buses
 - `bedrock.md.simulation.enabled`: enable the built-in market data simulator (no exchange connection needed)
 - `bedrock.adapter.type`: `binance` | `bitget` | `simulation`
 - `bedrock.pricing.enabled`: `false` (default) — enable PricingEngineCoordinator; set `true` to start Pricing Engine
 - `bedrock.pricing.symbols`: list of symbols to run pricing for (e.g., `[BTCUSDT, ETHUSDT]`)
 - `bedrock.oms.enabled`: `false` (default) — enable OmsCoordinator; set `true` to start OMS
 - `bedrock.oms.symbols`: list of symbols to manage orders for
-- `bedrock.oms.exchange`: `binance` (uses `BINANCE_API_KEY`/`BINANCE_SECRET_KEY`) | `simulation` (no-op gateway, safe for testing)
+- `bedrock.oms.exchange`: `binance` | `simulation` (no-op gateway, safe for testing)
+- `bedrock.strategy.enabled`: `true`/`false` — enable StrategyService
+- `bedrock.md.bitget.enabled`: enable Bitget V3 market data feed
+- `bedrock.md.bitget.symbols`: list of symbols for Bitget (e.g., `[BTCUSDT, ETHUSDT]`)
 
-Exchange credentials are injected via environment variables: `BINANCE_API_KEY`, `BINANCE_SECRET_KEY`, `BITGET_API_KEY`, `BITGET_SECRET_KEY`, `BITGET_PASSPHRASE`.
+**Exchange credentials** are injected via environment variables:
+- `BINANCE_API_KEY`, `BINANCE_SECRET_KEY`
+- `BITGET_API_KEY`, `BITGET_SECRET_KEY`, `BITGET_PASSPHRASE`
 
-Management/actuator API is on port 8081 (configurable via `bedrock.server.managementPort`). REST API base path is `/api/v1`. Key endpoints: `GET /api/v1/status`, `GET /api/v1/md/status`, `POST /api/v1/md/start|stop`, `GET /api/v1/strategies`, `POST /api/v1/strategies/{name}/start|stop`, `GET /api/v1/adapters/balances|positions`.
+**Management/actuator API:** Port 8081 (configurable via `bedrock.server.managementPort`). REST API base path `/api/v1`.
+
+**Key endpoints:**
+- `GET /api/v1/status` — system health
+- `GET /api/v1/md/status` — market data service status
+- `POST /api/v1/md/start|stop` — start/stop market data feeds
+- `GET /api/v1/strategies` — list strategies
+- `POST /api/v1/strategies/{name}/start|stop` — control individual strategies
+- `GET /api/v1/adapters/balances|positions` — exchange account info
 
 ## Known Issues & Gotchas
 
@@ -359,6 +402,21 @@ Management/actuator API is on port 8081 (configurable via `bedrock.server.manage
 - **BedrockApplicationTest failures**: 5 tests fail with Mockito `MockMaker` plugin init error — pre-existing, unrelated to Phases 3-5. All other bedrock-app tests pass.
 - **OmsCoordinator no bus warning**: When started without an `InstrumentEventBusCoordinator` (e.g., in unit tests), logs "no event bus available" — expected behavior, not an error.
 
+## Troubleshooting
+
+**Chronicle Queue initialization failures:**
+- Use `./scripts/start.sh` instead of `java -jar` — required `--add-opens` JVM flags are set in the script
+
+**Mockito MockMaker errors in tests:**
+- Pre-existing issue in `BedrockApplicationTest` (5 failing tests) — unrelated to Phases 3-5, safe to ignore
+
+**"no event bus available" warnings:**
+- Expected when running `OmsCoordinator` without `InstrumentEventBusCoordinator` (e.g., unit tests without full app context)
+
+**Events going missing:**
+- Check `DeadLetterChannel` for decode failures or unhandled exceptions in bus consumers
+- Verify `bedrock.bus.payloadCodec` matches the expected format (JSON vs SBE)
+
 ## Performance Constraints
 
 - **No heap allocation on the hot path** — use Agrona `DirectBuffer` / object pools; avoid `new` in `onMarketTick` / `onBookDelta` handlers.
@@ -366,3 +424,18 @@ Management/actuator API is on port 8081 (configurable via `bedrock.server.manage
 - When strategy detects backlog / lag, it must suspend command emission and only update internal state — never block the bus loop thread.
 - Prices and quantities are fixed-point integers (scale 1e-8). Never use `double` arithmetic for financial calculations.
 - Important events (plan/order/ack/fill) are written asynchronously to Chronicle Queue for replay — avoid adding synchronous I/O on the hot path.
+
+## Coding Conventions
+
+- Java 21, 4-space indentation, standard naming: `PascalCase` (classes/interfaces), `camelCase` (methods/fields), `UPPER_SNAKE_CASE` (constants).
+- All packages under `com.bedrock.mm.<module>`.
+- Prefer explicit, small classes in hot paths; follow existing primitive-heavy patterns for zero-allocation code.
+- Tests: `*Test` for unit tests, `*IntegrationTest` for integration tests. Add tests in the same module as the changed code.
+
+## Commit Conventions
+
+Use clear imperative messages scoped to the module, e.g.:
+- `pricing: clamp spread under high volatility`
+- `oms: add OrderStateMachine cancel-reject transition test`
+
+PRs must include: scope summary + affected modules, exact verification commands run, any new env var requirements (`BINANCE_*`, `BITGET_*`), and API/log screenshots when changing runtime or ops behavior.

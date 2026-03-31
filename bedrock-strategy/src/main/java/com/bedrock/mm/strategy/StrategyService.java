@@ -295,12 +295,13 @@ public class StrategyService {
         // Initialize strategy
         strategy.initialize(context);
         
-        // Set custom parameters if provided
+        StrategyParameters params = strategy.getParameters().copy();
+        params.setCustomParameter("strategyName", def.getName());
+        params.setCustomParameter("symbols", def.getSymbols());
         if (!def.getParameters().isEmpty()) {
-            StrategyParameters params = strategy.getParameters().copy();
             def.getParameters().forEach(params::setCustomParameter);
-            strategy.updateParameters(params);
         }
+        strategy.updateParameters(params);
         
         // Store strategy and context
         strategies.put(def.getName(), strategy);

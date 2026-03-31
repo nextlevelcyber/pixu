@@ -94,9 +94,19 @@ bedrock:
     enabled: true
     executionMode: LIVE
     strategies:
+      - name: GridMM
+        className: com.bedrock.mm.strategy.GridMmStrategy
+        enabled: true
+        symbols: [BTCUSDT, ETHUSDT]
+        parameters:
+          grid-spacing-bps: 10.0
+          num-levels: 3
+          size-per-level: 0.001
+          max-position: 0.01
+          reprice-threshold-bps: 5.0
       - name: SimpleMarketMaking
         className: com.bedrock.mm.strategy.SimpleMarketMakingStrategy
-        enabled: true
+        enabled: false
         symbols: [BTCUSDT, ETHUSDT]
         parameters:
           spread: 0.0015
@@ -199,10 +209,18 @@ bedrock:
         base-url: https://api.bitget.com
         ws-url: wss://ws.bitget.com/v3/ws
         pap-trading: true
-        ws-login-enabled: false
-        product-type: spot
-        uta-category: spot
-        health-path: /api/v2/public/time
+        ws-login-enabled: true
+        product-type: mix
+        uta-category: usdt-futures
+        margin-coin: USDT
+        health-path: /api/v2/mix/market/time
+        ws-subscriptions:
+          - channel: orders
+            instType: umcbl
+          - channel: positions
+            instType: umcbl
+          - channel: account
+            instType: umcbl
 
 # Spring Boot standard keys (kept minimal and referencing bedrock.*)
 server:
