@@ -1,0 +1,5 @@
+# Strict registry rejects unknown instruments without creating a book.
+registry|reject_unknown|1:1
+
+snapshot|1|2|1|1000|20000000000:100000000|20100000000:150000000
+expect_reject|none|none|1|2|1|UnknownInstrument

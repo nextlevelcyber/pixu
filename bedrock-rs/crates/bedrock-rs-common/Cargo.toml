@@ -1,0 +1,11 @@
+[package]
+name = "bedrock-rs-common"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bedrock_rs_common"
+path = "src/lib.rs"
+

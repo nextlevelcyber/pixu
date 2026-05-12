@@ -1,5 +1,10 @@
 # Repository Guidelines
 
+## Team AI Development Standard
+Before planning, editing, reviewing, debugging, or testing code, read and follow `ai-coding-standard.md`.
+
+Required project wiki protocol: read `wiki/wiki-schema.md` when the task involves design rationale, historical decisions, operational notes, or other knowledge that should be queried or ingested.
+
 ## Agents List
 
 ### hft-analyst

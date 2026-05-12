@@ -1,0 +1,19 @@
+[package]
+name = "bedrock-rs-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bedrock_rs_transport"
+path = "src/lib.rs"
+
+[dependencies]
+bedrock-rs-common = { path = "../bedrock-rs-common" }
+
+[features]
+default = []
+aeron-ipc = []
+aeron-udp = []
+

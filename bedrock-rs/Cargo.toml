@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "crates/bedrock-rs-common",
+    "crates/bedrock-rs-transport",
+    "crates/bedrock-rs-md",
+    "crates/bedrock-rs-replay",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+

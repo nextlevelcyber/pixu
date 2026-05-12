@@ -2,6 +2,8 @@
 .vscode/
 *.code-workspace
 .settings/
+.obsidian/
+.cursor/
 *.sublime-*
 
 # Java
@@ -24,6 +26,17 @@ pom.xml.versionsBackup
 pom.xml.next
 release.properties
 dependency-reduced-pom.xml
+
+# Rust
+# Cargo build output is already covered by target/ above.
+**/*.rs.bk
+*.rlib
+*.rmeta
+*.pdb
+*.profraw
+*.profdata
+.cargo/credentials
+.cargo/credentials.toml
 
 # Gradle
 .gradle/

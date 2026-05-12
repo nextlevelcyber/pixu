@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+请先阅读并遵守 @ai-coding-standard.md。
+
+Wiki 操作协议：@wiki/wiki-schema.md。
+
 ## Project Overview
 
 **Bedrock** is being refactored into a low-latency HFT Market Maker system written in Java 21. The target architecture (see `docs/QT_HFT_MM_ARCHITECTURE.md`) is a 4-process design with per-instrument strict ordering and tick-to-trade latency < 10μs.
