@@ -1,0 +1,7 @@
+# Binance Spot first applied event bridges REST snapshot lastUpdateId.
+policy|binance_spot
+spot_snapshot|100
+spot_event|98|101
+expect|Apply
+spot_event|102|105
+expect|Apply

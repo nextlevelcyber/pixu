@@ -1,0 +1,5 @@
+# Bitget books pseq=0 is a venue reset signal.
+policy|bitget_books
+bitget_snapshot|100
+bitget_update|101|0
+expect_reset|VenueReset

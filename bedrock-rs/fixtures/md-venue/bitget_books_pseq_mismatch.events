@@ -1,0 +1,5 @@
+# Bitget books pseq mismatch requires rebuild/resubscribe.
+policy|bitget_books
+bitget_snapshot|100
+bitget_update|102|99
+expect_gap|PreviousSequenceMismatch

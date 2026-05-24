@@ -3,6 +3,9 @@ members = [
     "crates/bedrock-rs-common",
     "crates/bedrock-rs-transport",
     "crates/bedrock-rs-md",
+    "crates/bedrock-rs-md-venue",
+    "crates/bedrock-rs-md-live",
+    "crates/bedrock-rs-mds",
     "crates/bedrock-rs-replay",
 ]
 resolver = "2"
@@ -11,4 +14,3 @@ resolver = "2"
 edition = "2021"
 license = "UNLICENSED"
 publish = false
-

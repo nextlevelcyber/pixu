@@ -252,6 +252,18 @@ impl BookReconstructor {
     }
 
     pub fn apply_delta(&mut self, delta: BookDelta) -> Vec<ReconstructionOutput> {
+        self.apply_delta_with_sequence_check(delta, true)
+    }
+
+    pub fn apply_trusted_delta(&mut self, delta: BookDelta) -> Vec<ReconstructionOutput> {
+        self.apply_delta_with_sequence_check(delta, false)
+    }
+
+    fn apply_delta_with_sequence_check(
+        &mut self,
+        delta: BookDelta,
+        check_sequence: bool,
+    ) -> Vec<ReconstructionOutput> {
         if let Some(reject) =
             self.reject_for_identity(delta.venue_id, delta.instrument_id, delta.sequence)
         {
@@ -271,7 +283,7 @@ impl BookReconstructor {
         }
 
         let expected = self.last_sequence.map(Sequence::next);
-        if expected != Some(delta.sequence) {
+        if check_sequence && expected != Some(delta.sequence) {
             let gap = BookGap {
                 venue_id: delta.venue_id,
                 instrument_id: delta.instrument_id,
@@ -396,6 +408,22 @@ impl BookRouter {
             .entry(key)
             .or_insert_with(|| BookReconstructor::new(key.venue_id, key.instrument_id))
             .apply_delta(delta)
+    }
+
+    pub fn apply_trusted_delta(&mut self, delta: BookDelta) -> Vec<ReconstructionOutput> {
+        let key = BookKey::new(delta.venue_id, delta.instrument_id);
+        if !self.registry.accepts(key) {
+            return vec![unknown_instrument_reject(
+                key.venue_id,
+                key.instrument_id,
+                delta.sequence,
+            )];
+        }
+
+        self.books
+            .entry(key)
+            .or_insert_with(|| BookReconstructor::new(key.venue_id, key.instrument_id))
+            .apply_trusted_delta(delta)
     }
 }
 
@@ -545,6 +573,34 @@ mod tests {
                 instrument_id: instrument(),
                 sequence: seq(2),
                 timestamp_ns: ts(2_000),
+                bid_price: price(10_050_000_000),
+                bid_quantity: qty(120_000_000),
+                ask_price: price(10_100_000_000),
+                ask_quantity: qty(150_000_000),
+            })]
+        );
+    }
+
+    #[test]
+    fn trusted_delta_skips_scalar_sequence_check_after_external_validation() {
+        let mut reconstructor = BookReconstructor::new(venue(), instrument());
+        reconstructor.apply_snapshot(snapshot(1));
+
+        let outputs = reconstructor.apply_trusted_delta(BookDelta {
+            venue_id: venue(),
+            instrument_id: instrument(),
+            sequence: seq(5),
+            timestamp_ns: ts(5_000),
+            updates: vec![update(Side::Bid, 10_050_000_000, 120_000_000)],
+        });
+
+        assert_eq!(
+            outputs,
+            vec![ReconstructionOutput::Bbo(Bbo {
+                venue_id: venue(),
+                instrument_id: instrument(),
+                sequence: seq(5),
+                timestamp_ns: ts(5_000),
                 bid_price: price(10_050_000_000),
                 bid_quantity: qty(120_000_000),
                 ask_price: price(10_100_000_000),

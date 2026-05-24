@@ -1,0 +1,7 @@
+# Binance Spot stale/duplicate range is ignored and does not advance state.
+policy|binance_spot
+spot_snapshot|100
+spot_event|90|100
+expect|IgnoreStale
+spot_event|99|101
+expect|Apply

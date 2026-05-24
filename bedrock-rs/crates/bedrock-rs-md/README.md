@@ -24,11 +24,13 @@ Normalized market data model and deterministic L2 order book reconstruction.
 - `BookReconstructor::new`.
 - `BookReconstructor::apply_snapshot`.
 - `BookReconstructor::apply_delta`.
+- `BookReconstructor::apply_trusted_delta`.
 - `BookReconstructor::state`.
 - `BookRouter::new`.
 - `BookRouter::with_registry`.
 - `BookRouter::apply_snapshot`.
 - `BookRouter::apply_delta`.
+- `BookRouter::apply_trusted_delta`.
 - `BookRouter::state`.
 - `InstrumentRegistry::auto_create`.
 - `InstrumentRegistry::allow_list`.
@@ -40,6 +42,8 @@ Normalized market data model and deterministic L2 order book reconstruction.
 - The reconstructor starts in `NeedsSnapshot`.
 - Snapshot initializes or recovers the book and may emit BBO.
 - Continuous delta updates price levels and may emit BBO.
+- `apply_delta` enforces scalar `last_sequence + 1` continuity for venue-neutral replay or already scalar-normalized streams.
+- `apply_trusted_delta` skips the scalar continuity check after an upstream venue adapter has already validated venue-native range continuity, such as Binance `U/u` diff depth batches.
 - Quantity `0` removes a price level.
 - Sequence gap moves the book to `Gapped` and emits `BookGap`.
 - Wrong venue or instrument emits `BookReject` and does not mutate state or consume sequence.

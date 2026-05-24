@@ -1,0 +1,6 @@
+# Bitget UTA depth channel classification.
+expect_channel|books|Incremental
+expect_channel|books1|SnapshotOnly
+expect_channel|books5|SnapshotOnly
+expect_channel|books50|SnapshotOnly
+expect_channel|ticker|None

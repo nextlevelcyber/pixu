@@ -28,9 +28,13 @@ bedrock-rs/
     bedrock-rs-common/
     bedrock-rs-transport/
     bedrock-rs-md/
+    bedrock-rs-md-venue/
+    bedrock-rs-md-live/
+    bedrock-rs-mds/
     bedrock-rs-replay/
   fixtures/
     md/
+    md-venue/
 ```
 
 职责划分：
@@ -38,6 +42,9 @@ bedrock-rs/
 - `bedrock-rs-common`：fixed-point value types、venue、instrument、side、timestamp、sequence、event envelope。
 - `bedrock-rs-transport`：publisher/subscriber trait、in-proc bounded channel、Aeron IPC/UDP adapter 边界。
 - `bedrock-rs-md`：normalized market data model、L2 book、snapshot/delta reconstruction、per-instrument router、BBO generation。
+- `bedrock-rs-md-venue`：Binance/Bitget raw parser、sequence policy、normalization、bootstrap pipeline。
+- `bedrock-rs-md-live`：public exchange REST/WS endpoint construction, one-shot smoke helpers, and bounded live depth session helpers。
+- `bedrock-rs-mds`：composition layer，把 venue pipeline output 路由进 venue-neutral `BookRouter`，输出或发布 MDS reconstruction/BBO/stale/gap。
 - `bedrock-rs-replay`：fixture loader、multi-instrument replay harness、golden assertions。
 
 不创建 pricing/oms crates，避免过早占坑。
@@ -47,6 +54,9 @@ Milestone 4 后，每个 crate 都有 README 和 crate-level rustdoc：
 - `bedrock-rs/crates/bedrock-rs-common/README.md`
 - `bedrock-rs/crates/bedrock-rs-transport/README.md`
 - `bedrock-rs/crates/bedrock-rs-md/README.md`
+- `bedrock-rs/crates/bedrock-rs-md-venue/README.md`
+- `bedrock-rs/crates/bedrock-rs-md-live/README.md`
+- `bedrock-rs/crates/bedrock-rs-mds/README.md`
 - `bedrock-rs/crates/bedrock-rs-replay/README.md`
 
 README 说明该 crate owns / does not own / public API / verification / next design questions。
@@ -85,6 +95,41 @@ Milestone 6 后，`BookRouter` 支持显式 instrument registry：
 - `BookRouter::with_registry(registry)` 在严格模式下拒绝未知 key。
 - 未知 key 输出 `RejectReason::UnknownInstrument`，不创建 book，不改变已有 book state，不推进任何 sequence。
 - registry unknown reject 的 `BookReject.expected_venue_id` 和 `expected_instrument_id` 为 `None`，因为它不是某个已配置 book 的 identity mismatch。
+
+Milestone 15 后，`BookRouter` 保留两类 delta 入口：
+
+- `BookRouter::apply_delta`：严格 scalar sequence continuity，适用于 replay 或已经被归一成 `last + 1` 的数据流。
+- `BookRouter::apply_trusted_delta`：跳过 scalar continuity check，但仍验证 identity/state，适用于已经由 `bedrock-rs-md-venue` 校验过 Binance `U/u`、Futures `U/u/pu`、Bitget `seq/pseq` 的 live venue deltas。
+
+这个拆分避免 Binance range update id 被 `seq + 1` 规则误判为 book gap，同时不削弱 offline replay 的严格性。
+
+Milestone 17 后，`bedrock-rs-mds` 可把 `MdsOutput` 发布到调用方提供的 `Publisher<MdsOutput>`：
+
+- `MdsRouter::apply_pipeline_output_to`
+- `MdsRouter::apply_pipeline_outputs_to`
+- `MdsPublishError { published, source }`
+
+当前只验证 in-proc channel；Aeron IPC/UDP 仍是后续 adapter 工作，不在 MDS reconstruction 内部硬编码。
+
+Milestone 19 后，`MdsOutput` 提供稳定 envelope metadata：
+
+- `MdsOutputKind`：`Bbo`、`BookGap`、`BookReject`、`VenueGap`、`IgnoredStale`
+- `MdsStreamKey { venue_id, instrument_id, kind }`
+- `MdsOutputEnvelope { key, sequence, timestamp_ns }`
+- `MdsOutput::envelope()`
+
+这个 envelope 是 Pricing、Monitor、in-proc、Aeron IPC/UDP 后续共同依赖的 stream routing 合同；正式 SBE schema 仍是下一阶段工作。
+
+Milestone 20 后，`bedrock-rs-mds` 提供 Rust-first wire schema draft：
+
+- `MDS_WIRE_SCHEMA_ID = 20`
+- `MDS_WIRE_SCHEMA_VERSION = 1`
+- template ids：`Bbo=1200`、`BookGap=1201`、`BookReject=1202`、`VenueGap=1203`、`IgnoredStale=1204`
+- `MdsWireEnvelope`
+- `MdsWireMessage`
+- `MdsOutput::wire_message()`
+
+该 draft 只锁定 Rust 层合同和 reason code/null convention，不修改 Java `bedrock-sbe` XML，也不生成 codec。
 
 ## Transport Contract
 
@@ -291,7 +336,7 @@ cd bedrock-rs && cargo doc --no-deps
 下一阶段优先事项：
 
 - 决定是否将 simple sorted vector 升级为 fixed-capacity price grid；该优化必须在新的 ADR 中说明。
-- 在实现 live feed 前，按 `wiki/pages/architecture/rust-venue-sequence-rules.md` 先加 venue-specific fixtures，再实现 parser/sequence policy。
+- 在实现 live feed 前，基于 `bedrock-rs-md-venue` 继续加 venue parser fixtures，再实现 JSON parser / normalize adapter。
 - 为 Aeron IPC/UDP adapter 设计 channel id、stream id、publication/subscription lifecycle 和 loss/backpressure mapping。
 - 判断 unknown instrument reject 是否需要额外进入 quarantine/report stream。
 

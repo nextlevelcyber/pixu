@@ -1,0 +1,19 @@
+[package]
+name = "bedrock-rs-md-live"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bedrock_rs_md_live"
+path = "src/lib.rs"
+
+[dependencies]
+bedrock-rs-common = { path = "../bedrock-rs-common" }
+bedrock-rs-md-venue = { path = "../bedrock-rs-md-venue" }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-tungstenite = { version = "0", features = ["rustls-tls-webpki-roots"] }

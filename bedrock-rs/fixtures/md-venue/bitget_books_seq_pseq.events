@@ -1,0 +1,7 @@
+# Bitget books snapshot then pseq-continuous updates.
+policy|bitget_books
+bitget_snapshot|100
+bitget_update|101|100
+expect|Apply
+bitget_update|102|101
+expect|Apply
